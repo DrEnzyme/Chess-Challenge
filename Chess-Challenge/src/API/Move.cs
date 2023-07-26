@@ -17,7 +17,7 @@ namespace ChessChallenge.API
 		public bool IsCastles => move.MoveFlag == Chess.Move.CastleFlag;
 		public bool IsNull => move.IsNull;
 		public ushort RawValue => move.Value;
-		public static readonly Move NullMove = new();
+		public static readonly Move NullMove = new(Chess.Move.NullMove, 0);
 
 		readonly Chess.Move move;
 		readonly ushort pieceTypeData;
@@ -26,10 +26,10 @@ namespace ChessChallenge.API
 		/// Create a null/invalid move.
 		/// This is simply an invalid move that can be used as a placeholder until a valid move has been found
 		/// </summary>
-		public Move()
+		public Move(Chess.Move _move, ushort _pieceTypeData)
 		{
-			move = Chess.Move.NullMove;
-			pieceTypeData = 0;
+			move = _move;
+			pieceTypeData = _pieceTypeData;
 		}
 
 		/// <summary>
