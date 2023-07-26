@@ -36,98 +36,79 @@ public class MyBot : IChessBot
     int DepthSearch( int _depth, bool isMyMove, out Move _bestMove, bool _levelOne = false )
     {
         Move[] moves = board.GetLegalMoves();
-        Dictionary<Move, int> movesAndScores = moves.ToDictionary(item => item, value => 0);
-        //List<int> moveScores = new List<int>(new int[moves.Length]);
-        
-        foreach( var keyValuePair in movesAndScores)
+        int[] moveScores = new int[moves.Length];
+     
+
+        for (int i = 0; i < moves.Count(); ++i)
         {
-            movesAndScores[keyValuePair.Key] = EvaluateMove(board, keyValuePair.Key, isMyMove);
+            moveScores[i] += EvaluateMove(board, moves[i], isMyMove);
             if (_depth > 0)
             {
-                board.MakeMove(keyValuePair.Key);
-                    //Add the best/worst move from the rest of our depth search.
-                    movesAndScores[keyValuePair.Key] += DepthSearch(_depth - 1, !isMyMove, out _bestMove);
-                board.UndoMove(keyValuePair.Key);
+                board.MakeMove(moves[i]);
+                //Add the best/worst move from the rest of our depth search.
+                moveScores[i] += DepthSearch(_depth - 1, !isMyMove, out _bestMove);
+                board.UndoMove(moves[i]);
             }
         }
-
-        movesAndScores.OrderBy(x => -x.Value);
-
-        //for(int i = 0; i < movesAndScores.Count; ++i )
-        //{
-        //    //movesAndScores.Set = EvaluateMove(board, moves[i], isMyMove);
-        //    if (_depth > 0)
-        //    {
-        //        board.MakeMove(moves[i]);
-        //        //Add the best/worst move from the rest of our depth search.
-        //        moveScores[i] += DepthSearch(_depth - 1, !isMyMove, out _bestMove);
-        //        board.UndoMove(moves[i]);
-        //    }
-        //}
 
         //New approach...
         //Evaluate all the moves.
         //Trim out some of the bad moves.
         //Depth search on the remainders.
 
-        if (movesAndScores.Count == 0)
+        if (moves.Count() == 0)
         {
             _bestMove = new Move();
-            return 0;
+            return -99;
         }
 
-        KeyValuePair<Move, int> bmkvp = (isMyMove ? movesAndScores.First() : movesAndScores.Last());
-        _bestMove = bmkvp.Key;
+        Array.Sort(moveScores, moves);
+        _bestMove = moves[moves.Count()-1];
 
+        //TODO: Delete this logging.
         if (_levelOne)
         {
-            foreach (var kvp in movesAndScores)
-                Console.WriteLine("Move: " + kvp.Key.ToString() + "\t" + kvp.Value);
+            for (int i = 0; i < moves.Count(); ++i)
+                Console.WriteLine("Move: " + moves[i] + "\t" + moveScores[i]);
         }
-            
 
-        return bmkvp.Value;
+        return moveScores[moves.Count() - 1];
     }
 
     int EvaluateMove(Board _b, Move _move, bool isMyMove, bool _log = false )
     {
         // Piece values: null, pawn, knight, bishop, rook, queen, king
-        int[] pieceValues = { 0, 10, 30, 30, 50, 90, 100 };
-        int[] pieceBonusMoveValues = { 0, 5, 12, 11, 10, 13, -5 };
+        int[] pieceValues = { 0, 100, 300, 300, 500, 900, 1000 };
+        int[] pieceBonusMoveValues = { 0, 80, 120, 120, 100, 130, -50 };
 
         //Beginning of the game we prefer to move pawns.
         if( turnCount < 6 )
-            pieceBonusMoveValues = new int[] { 0, 12, 11, 11, 0, 8, -5 };
+            pieceBonusMoveValues = new int[] { 0, 110, 110, 110, 0, 80, -50 };
 
-        int moveScore = 0;
-        
-        if (MoveIsCheckmate(_move))
-        {
-            return 999999;
-        }
+        int moveScore = CheckOrCheckmate(_move);
 
         Piece capturedPiece = _b.GetPiece(_move.TargetSquare);
         if (pieceValues[(int)capturedPiece.PieceType] > moveScore)
         {
-            moveScore += pieceValues[(int)capturedPiece.PieceType];
+            moveScore += pieceValues[(int)capturedPiece.PieceType] - (pieceValues[(int)_move.MovePieceType]/10);
             if (_log)
                 Console.WriteLine("There's a piece I can capture. Move Score is: " + moveScore);
         }
 
         //File bonus
-        moveScore += (3 - Math.Abs(_move.TargetSquare.File - 3 - (_move.TargetSquare.File % 2))) * 1;
+        moveScore += (3 - Math.Abs(_move.TargetSquare.File - 3 - (_move.TargetSquare.File % 2))) * 10;
         if (_log)
             Console.WriteLine("My file bonus brings us to: " + moveScore);
         //Rank bonus
-        moveScore += _move.TargetSquare.Rank * forwardIsUp;
+        moveScore += _move.TargetSquare.Rank * forwardIsUp * 10; //Multiplying this by two makes the bot very aggressive.
         if (_log)
             Console.WriteLine("My rank bonus brings us to: " + moveScore);
         moveScore += pieceBonusMoveValues[(int)(_move.MovePieceType)];
         if (_log)
             Console.WriteLine("My piece bonus brings us to: " + moveScore);
-        //moveScore += IsPieceProtected(_b, _move, isMyMove ? amIWhite : !amIWhite);
-        //if (_log)
-        //    Console.WriteLine("My protect bonus brings us to: " + moveScore);
+        moveScore += IsPieceProtected(_b, _move, isMyMove ? amIWhite : !amIWhite);
+        if (_log)
+            Console.WriteLine("My protect bonus brings us to: " + moveScore);
         moveScore -= Convert.ToInt32(WillThisCauseRepeated(_move)) * 10;
         if (_log)
             Console.WriteLine("My repeated board penalty brings us to: " + moveScore);
@@ -137,6 +118,9 @@ public class MyBot : IChessBot
 
     int IsPieceProtected( Board _b, Move _move, bool _whiteIsAllied )
     {
+        if (turnCount == 0)
+            return 0;
+
         int bonus = 0;
         int protectBonus = 8;
         Piece p;
@@ -170,11 +154,13 @@ public class MyBot : IChessBot
     }
 
     // Test if this move gives checkmate
-    bool MoveIsCheckmate(Move move)
+    int CheckOrCheckmate(Move move)
     {
+        int moveScore = 0;
         board.MakeMove(move);
-        bool isMate = board.IsInCheckmate();
+            moveScore += Convert.ToInt32(board.IsInCheckmate())*999999;
+            moveScore += Convert.ToInt32(board.IsInCheck()) * 10;
         board.UndoMove(move);
-        return isMate;
+        return moveScore;
     }
 }
