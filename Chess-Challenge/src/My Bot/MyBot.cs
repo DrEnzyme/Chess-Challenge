@@ -10,9 +10,22 @@ public class MyBot : IChessBot
     static bool amIWhite;
     static int forwardIsUp = 1;
     static int turnCount = 0;
+    const int CHECK_BONUS = 1000; //-piecevalue.
+    const int RANK_FILE_MULTIPLIER = 1;
+    const double DISREGARD_MOVES_STD_DEV_MOD = 3;
 
-    public Move Think(Board _b, Timer timer)
+    // Piece values: null, pawn, knight, bishop, rook, queen, king
+    int[] pieceValues = { 0, 100, 300, 300, 500, 900, 500 };
+    int[] pieceBonusMoveValues = { 0, 10, 20, 15, 10, 25, -5 };
+
+public Move Think(Board _b, Timer timer)
     {
+        Console.WriteLine("Turn: " + turnCount);
+
+        //Beginning of the game we prefer to move pawns.
+        if (turnCount < 3)
+            pieceBonusMoveValues = new int[] { 0, 16, 15, 10, 10, 30, -5 };
+
         board = _b;
 
         amIWhite = board.IsWhiteToMove;
@@ -23,10 +36,10 @@ public class MyBot : IChessBot
 
         //Then try and wing it.
         Move bestMove = new Move();
-        int bestMoveValue = DepthSearch(3, true, out bestMove, true);
+        int bestMoveValue = DepthSearch(1, true, out bestMove, true);
 
-        Console.WriteLine("Trying move \"" + bestMove.MovePieceType + " to: " + bestMove.TargetSquare.Name + " with score: " + bestMoveValue );
-        EvaluateMove(board, bestMove, true, true);
+        Console.WriteLine("Trying move \"" + bestMove.MovePieceType + " to: " + bestMove.TargetSquare.Name + "\" with score: " + bestMoveValue );
+        EvaluateMove(board, bestMove, true);
         ++turnCount;
 
         //System.Threading.Thread.Sleep(100);
@@ -37,33 +50,63 @@ public class MyBot : IChessBot
     {
         Move[] moves = board.GetLegalMoves();
         int[] moveScores = new int[moves.Length];
-     
+        int myMoveMultiplier = (isMyMove ? 1 : -1);
 
         for (int i = 0; i < moves.Count(); ++i)
         {
-            moveScores[i] += EvaluateMove(board, moves[i], isMyMove);
-            if (_depth > 0)
+            moveScores[i] += EvaluateMove(board, moves[i]) * myMoveMultiplier;
+        }
+
+        //Null move check.
+        if (moves.Count() == 0)
+        {
+            _bestMove = new Move();
+            return 0;
+        }
+
+        //Standard deviation squared.
+        //double average = moveScores.Average();
+        //double stdDeviation = Math.Sqrt(moveScores.Average(v => Math.Pow(v - average, 2)));
+
+
+
+        //Sort array so good moves are at the front
+        //Array.Sort(moveScores, moves);
+        //if (isMyMove)
+        //{
+        //    Array.Reverse(moves);
+        //    Array.Reverse(moveScores);
+        //}
+
+        if ( _depth > 0 )
+        {
+            for (int i = 0; i < moves.Count(); ++i)
             {
+                //Try to consider moves that are better than X stdDeviations from average
+                //if (moveScores[i] < (average - DISREGARD_MOVES_STD_DEV_MOD * stdDeviation))
+                //{
+                //    moveScores[i] += -9999;
+                //    continue;
+                //}
+                //string moveString = moves[i].ToString();
                 board.MakeMove(moves[i]);
-                //Add the best/worst move from the rest of our depth search.
-                moveScores[i] += DepthSearch(_depth - 1, !isMyMove, out _bestMove);
+                //Add the best / worst move from the rest of our depth search. Opponent's score should be inverted.
+                int difference = DepthSearch(_depth - 1, !isMyMove, out _bestMove);
+                moveScores[i] += difference;
                 board.UndoMove(moves[i]);
             }
         }
 
-        //New approach...
-        //Evaluate all the moves.
-        //Trim out some of the bad moves.
-        //Depth search on the remainders.
-
-        if (moves.Count() == 0)
-        {
-            _bestMove = new Move();
-            return -99;
-        }
-
+        //Sort array so good moves are at the front
         Array.Sort(moveScores, moves);
-        _bestMove = moves[moves.Count()-1];
+
+        //If it's out turn, put the best move at the front of the array (highest value).
+        //If it's not our turn, put the MOST DAMAGING move at the front of the array (lowest value).
+        if( isMyMove )
+        {
+            Array.Reverse(moves);
+            Array.Reverse(moveScores);
+        }
 
         //TODO: Delete this logging.
         if (_levelOne)
@@ -72,48 +115,36 @@ public class MyBot : IChessBot
                 Console.WriteLine("Move: " + moves[i] + "\t" + moveScores[i]);
         }
 
-        return moveScores[moves.Count() - 1];
+        _bestMove = moves[0];
+        return moveScores[0];
     }
 
-    int EvaluateMove(Board _b, Move _move, bool isMyMove, bool _log = false )
+    int EvaluateMove(Board _b, Move _move, bool _log = false )
     {
-        // Piece values: null, pawn, knight, bishop, rook, queen, king
-        int[] pieceValues = { 0, 100, 300, 300, 500, 900, 1000 };
-        int[] pieceBonusMoveValues = { 0, 80, 120, 120, 100, 130, -50 };
+        int moveScore = pieceBonusMoveValues[(int)_move.MovePieceType];
 
-        //Beginning of the game we prefer to move pawns.
-        if( turnCount < 6 )
-            pieceBonusMoveValues = new int[] { 0, 110, 110, 110, 0, 80, -50 };
+        if (_log) Console.WriteLine("Move score piece bonus: " + moveScore);
 
-        int moveScore = CheckOrCheckmate(_move);
+        moveScore += CheckOrCheckmate(_move);
+
+        if (_log) Console.WriteLine("With check bonus: " + moveScore);
 
         Piece capturedPiece = _b.GetPiece(_move.TargetSquare);
-        if (pieceValues[(int)capturedPiece.PieceType] > moveScore)
+        if (capturedPiece.IsNull == false && pieceValues[(int)capturedPiece.PieceType] > moveScore)
         {
             moveScore += pieceValues[(int)capturedPiece.PieceType] - (pieceValues[(int)_move.MovePieceType]/10);
-            if (_log)
-                Console.WriteLine("There's a piece I can capture. Move Score is: " + moveScore);
         }
 
-        //File bonus
-        moveScore += (3 - Math.Abs(_move.TargetSquare.File - 3 - (_move.TargetSquare.File % 2))) * 10;
-        if (_log)
-            Console.WriteLine("My file bonus brings us to: " + moveScore);
-        //Rank bonus
-        moveScore += _move.TargetSquare.Rank * forwardIsUp * 10; //Multiplying this by two makes the bot very aggressive.
-        if (_log)
-            Console.WriteLine("My rank bonus brings us to: " + moveScore);
-        moveScore += pieceBonusMoveValues[(int)(_move.MovePieceType)];
-        if (_log)
-            Console.WriteLine("My piece bonus brings us to: " + moveScore);
-        moveScore += IsPieceProtected(_b, _move, isMyMove ? amIWhite : !amIWhite);
-        if (_log)
-            Console.WriteLine("My protect bonus brings us to: " + moveScore);
-        moveScore -= Convert.ToInt32(WillThisCauseRepeated(_move)) * 10;
-        if (_log)
-            Console.WriteLine("My repeated board penalty brings us to: " + moveScore);
+        if (_log) Console.WriteLine("With capture bonus: " + moveScore);
 
-        return moveScore * (isMyMove ? 1 : -1);
+        //File bonus
+        moveScore += (3 - Math.Abs(_move.TargetSquare.File - 3 - (_move.TargetSquare.File % 2)))* RANK_FILE_MULTIPLIER;
+        //Rank bonus
+        moveScore += _move.TargetSquare.Rank * forwardIsUp * RANK_FILE_MULTIPLIER; //Multiplying this by two makes the bot very aggressive.
+
+        if (_log) Console.WriteLine("With rank/file bonus: " + moveScore);
+
+        return moveScore;
     }
 
     int IsPieceProtected( Board _b, Move _move, bool _whiteIsAllied )
@@ -159,7 +190,7 @@ public class MyBot : IChessBot
         int moveScore = 0;
         board.MakeMove(move);
             moveScore += Convert.ToInt32(board.IsInCheckmate())*999999;
-            moveScore += Convert.ToInt32(board.IsInCheck()) * 10;
+            moveScore += Convert.ToInt32(board.IsInCheck()) * ((CHECK_BONUS - pieceValues[(int)move.MovePieceType])/10);
         board.UndoMove(move);
         return moveScore;
     }
