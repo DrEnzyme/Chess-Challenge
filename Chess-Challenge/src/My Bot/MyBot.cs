@@ -12,7 +12,7 @@ public class MyBot : IChessBot
     static int turnCount = 0;
     const int CHECK_BONUS = 1000; //-piecevalue.
     const int RANK_FILE_MULTIPLIER = 1;
-    const double DISREGARD_MOVES_STD_DEV_MOD = 3;
+    const double DISREGARD_MOVES_STD_DEV_MOD = 2.5;
 
     // Piece values: null, pawn, knight, bishop, rook, queen, king
     int[] pieceValues = { 0, 100, 300, 300, 500, 900, 500 };
@@ -24,7 +24,7 @@ public Move Think(Board _b, Timer timer)
 
         //Beginning of the game we prefer to move pawns.
         if (turnCount < 3)
-            pieceBonusMoveValues = new int[] { 0, 16, 15, 10, 10, 30, -5 };
+            pieceBonusMoveValues = new int[] { 0, 17, 15, 10, 10, 30, -5 };
 
         board = _b;
 
@@ -36,7 +36,7 @@ public Move Think(Board _b, Timer timer)
 
         //Then try and wing it.
         Move bestMove = new Move();
-        int bestMoveValue = DepthSearch(1, true, out bestMove, true);
+        int bestMoveValue = DepthSearch(3, true, out bestMove, true);
 
         Console.WriteLine("Trying move \"" + bestMove.MovePieceType + " to: " + bestMove.TargetSquare.Name + "\" with score: " + bestMoveValue );
         EvaluateMove(board, bestMove, true);
@@ -65,8 +65,8 @@ public Move Think(Board _b, Timer timer)
         }
 
         //Standard deviation squared.
-        //double average = moveScores.Average();
-        //double stdDeviation = Math.Sqrt(moveScores.Average(v => Math.Pow(v - average, 2)));
+        double average = moveScores.Average();
+        double stdDeviation = Math.Sqrt(moveScores.Average(v => Math.Pow(v - average, 2)));
 
 
 
@@ -83,11 +83,11 @@ public Move Think(Board _b, Timer timer)
             for (int i = 0; i < moves.Count(); ++i)
             {
                 //Try to consider moves that are better than X stdDeviations from average
-                //if (moveScores[i] < (average - DISREGARD_MOVES_STD_DEV_MOD * stdDeviation))
-                //{
-                //    moveScores[i] += -9999;
-                //    continue;
-                //}
+                if (moveScores[i] < (average - DISREGARD_MOVES_STD_DEV_MOD * stdDeviation) && isMyMove)
+                {
+                    moveScores[i] += -9999 * myMoveMultiplier;
+                    continue;
+                }
                 //string moveString = moves[i].ToString();
                 board.MakeMove(moves[i]);
                 //Add the best / worst move from the rest of our depth search. Opponent's score should be inverted.
@@ -141,8 +141,10 @@ public Move Think(Board _b, Timer timer)
         moveScore += (3 - Math.Abs(_move.TargetSquare.File - 3 - (_move.TargetSquare.File % 2)))* RANK_FILE_MULTIPLIER;
         //Rank bonus
         moveScore += _move.TargetSquare.Rank * forwardIsUp * RANK_FILE_MULTIPLIER; //Multiplying this by two makes the bot very aggressive.
-
         if (_log) Console.WriteLine("With rank/file bonus: " + moveScore);
+        //Penalty for repeated...
+        moveScore += Convert.ToInt32(WillThisCauseRepeated(_move)) * -200;
+        if (_log) Console.WriteLine("repeated penalty: " + moveScore);
 
         return moveScore;
     }
@@ -190,7 +192,7 @@ public Move Think(Board _b, Timer timer)
         int moveScore = 0;
         board.MakeMove(move);
             moveScore += Convert.ToInt32(board.IsInCheckmate())*999999;
-            moveScore += Convert.ToInt32(board.IsInCheck()) * ((CHECK_BONUS - pieceValues[(int)move.MovePieceType])/10);
+            moveScore += Convert.ToInt32(board.IsInCheck()) * ((CHECK_BONUS - pieceValues[(int)move.MovePieceType])/50);
         board.UndoMove(move);
         return moveScore;
     }
