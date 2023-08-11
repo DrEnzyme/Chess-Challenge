@@ -6,25 +6,54 @@ using System.Numerics;
 
 public class MyBot : IChessBot
 {
-    static Board board;
-    static bool amIWhite;
-    static int forwardIsUp = 1;
-    static int turnCount = 0;
-    const int CHECK_BONUS = 1000; //-piecevalue.
+    Board board;
+    bool amIWhite;
+    int forwardIsUp = 1;
+    int turnCount = 0;
+    const int CHECK_BONUS = 950; //-piecevalue.
     const int RANK_FILE_MULTIPLIER = 1;
-    const double DISREGARD_MOVES_STD_DEV_MOD = 2.5;
+    double DISREGARD_MOVES_STD_DEV_MOD = 2.5;
+
+    bool checkDraws = false;
+    Timer timer;
 
     // Piece values: null, pawn, knight, bishop, rook, queen, king
     int[] pieceValues = { 0, 100, 300, 300, 500, 900, 500 };
-    int[] pieceBonusMoveValues = { 0, 10, 20, 15, 10, 25, -5 };
+    int[] pieceBonusMoveValues = { 0, 10, 13, 12, 10, 14, -5 };
 
-public Move Think(Board _b, Timer timer)
+    struct TransitionTableEntry
     {
-        Console.WriteLine("Turn: " + turnCount);
+        public TransitionTableEntry( ulong _key , int _moveScore, Move _bestMove, int _depth)
+        {
+            key = _key;
+            moveScore = _moveScore;
+            move = _bestMove;
+            depth = _depth;
+        }
+
+        public ulong key;
+        public int moveScore;
+        public Move move;
+        public int depth;
+    }
+
+    const int entries = (1 << 20);
+    TransitionTableEntry[] tTable = new TransitionTableEntry[entries];
+
+    public Move Think(Board _b, Timer _timer)
+    {
+        //Console.WriteLine("Turn: " + turnCount);
+        timer = _timer;
+
+        if ( timer.MillisecondsRemaining < 3000 )
+        {
+            DISREGARD_MOVES_STD_DEV_MOD = 2.4 - (1.0 - ((double)timer.MillisecondsRemaining / 3000.0));
+            //Console.WriteLine("Considering less moves..." + DISREGARD_MOVES_STD_DEV_MOD.ToString());
+        }
 
         //Beginning of the game we prefer to move pawns.
         if (turnCount < 3)
-            pieceBonusMoveValues = new int[] { 0, 17, 15, 10, 10, 30, -5 };
+            pieceBonusMoveValues = new int[] { 0, 17, 16, 10, 10, 18, -5 };
 
         board = _b;
 
@@ -39,8 +68,11 @@ public Move Think(Board _b, Timer timer)
         int bestMoveValue = DepthSearch(3, true, out bestMove, true);
 
         Console.WriteLine("Trying move \"" + bestMove.MovePieceType + " to: " + bestMove.TargetSquare.Name + "\" with score: " + bestMoveValue );
-        EvaluateMove(board, bestMove, true);
+        //EvaluateMove(board, bestMove, true);
+
         ++turnCount;
+
+        checkDraws = IsCheckOrCheckmate(bestMove) > 0;
 
         //System.Threading.Thread.Sleep(100);
         return bestMove;
@@ -51,6 +83,14 @@ public Move Think(Board _b, Timer timer)
         Move[] moves = board.GetLegalMoves();
         int[] moveScores = new int[moves.Length];
         int myMoveMultiplier = (isMyMove ? 1 : -1);
+        ulong safeKey = board.ZobristKey % entries;
+
+        if (tTable[safeKey].key == board.ZobristKey && _depth < 3 && _depth >= tTable[safeKey].depth)
+        {
+            //Console.WriteLine("Zobrist key found!");
+            _bestMove = tTable[safeKey].move;
+            return tTable[safeKey].moveScore;
+        }
 
         for (int i = 0; i < moves.Count(); ++i)
         {
@@ -68,31 +108,23 @@ public Move Think(Board _b, Timer timer)
         double average = moveScores.Average();
         double stdDeviation = Math.Sqrt(moveScores.Average(v => Math.Pow(v - average, 2)));
 
-
-
-        //Sort array so good moves are at the front
-        //Array.Sort(moveScores, moves);
-        //if (isMyMove)
-        //{
-        //    Array.Reverse(moves);
-        //    Array.Reverse(moveScores);
-        //}
-
         if ( _depth > 0 )
         {
             for (int i = 0; i < moves.Count(); ++i)
             {
                 //Try to consider moves that are better than X stdDeviations from average
-                if (moveScores[i] < (average - DISREGARD_MOVES_STD_DEV_MOD * stdDeviation) && isMyMove)
+                if ((moveScores[i] < (average - DISREGARD_MOVES_STD_DEV_MOD * stdDeviation) && isMyMove) ||
+                    (moveScores[i] > (average + DISREGARD_MOVES_STD_DEV_MOD * stdDeviation) && isMyMove == false))
                 {
                     moveScores[i] += -9999 * myMoveMultiplier;
                     continue;
                 }
                 //string moveString = moves[i].ToString();
                 board.MakeMove(moves[i]);
+
                 //Add the best / worst move from the rest of our depth search. Opponent's score should be inverted.
-                int difference = DepthSearch(_depth - 1, !isMyMove, out _bestMove);
-                moveScores[i] += difference;
+                int bestMoveScore = DepthSearch(_depth - 1, !isMyMove, out _bestMove);
+                moveScores[i] += bestMoveScore;
                 board.UndoMove(moves[i]);
             }
         }
@@ -100,34 +132,30 @@ public Move Think(Board _b, Timer timer)
         //Sort array so good moves are at the front
         Array.Sort(moveScores, moves);
 
-        //If it's out turn, put the best move at the front of the array (highest value).
-        //If it's not our turn, put the MOST DAMAGING move at the front of the array (lowest value).
-        if( isMyMove )
-        {
-            Array.Reverse(moves);
-            Array.Reverse(moveScores);
-        }
-
         //TODO: Delete this logging.
-        if (_levelOne)
-        {
-            for (int i = 0; i < moves.Count(); ++i)
-                Console.WriteLine("Move: " + moves[i] + "\t" + moveScores[i]);
-        }
+        //if (_levelOne)
+        //{
+        //    for (int i = 0; i < moves.Count(); ++i)
+        //        Console.WriteLine("Move: " + moves[i] + "\t" + moveScores[i]);
+        //}
 
-        _bestMove = moves[0];
-        return moveScores[0];
+        _bestMove = isMyMove ? moves[moves.Count()-1] : moves[0];
+        int bestScore = isMyMove ? moveScores[moveScores.Count() - 1] : moveScores[0];
+
+        tTable[safeKey] = new TransitionTableEntry(board.ZobristKey, bestScore, _bestMove, _depth);
+
+        return bestScore;
     }
 
     int EvaluateMove(Board _b, Move _move, bool _log = false )
     {
         int moveScore = pieceBonusMoveValues[(int)_move.MovePieceType];
 
-        if (_log) Console.WriteLine("Move score piece bonus: " + moveScore);
+        //if (_log) Console.WriteLine("Move score piece bonus: " + moveScore);
 
-        moveScore += CheckOrCheckmate(_move);
+        moveScore += IsCheckOrCheckmate(_move);
 
-        if (_log) Console.WriteLine("With check bonus: " + moveScore);
+        //if (_log) Console.WriteLine("With check bonus: " + moveScore);
 
         Piece capturedPiece = _b.GetPiece(_move.TargetSquare);
         if (capturedPiece.IsNull == false && pieceValues[(int)capturedPiece.PieceType] > moveScore)
@@ -135,42 +163,20 @@ public Move Think(Board _b, Timer timer)
             moveScore += pieceValues[(int)capturedPiece.PieceType] - (pieceValues[(int)_move.MovePieceType]/10);
         }
 
-        if (_log) Console.WriteLine("With capture bonus: " + moveScore);
+        //if (_log) Console.WriteLine("With capture bonus: " + moveScore);
 
         //File bonus
         moveScore += (3 - Math.Abs(_move.TargetSquare.File - 3 - (_move.TargetSquare.File % 2)))* RANK_FILE_MULTIPLIER;
         //Rank bonus
         moveScore += _move.TargetSquare.Rank * forwardIsUp * RANK_FILE_MULTIPLIER; //Multiplying this by two makes the bot very aggressive.
-        if (_log) Console.WriteLine("With rank/file bonus: " + moveScore);
+        //if (_log) Console.WriteLine("With rank/file bonus: " + moveScore);
         //Penalty for repeated...
-        moveScore += Convert.ToInt32(WillThisCauseRepeated(_move)) * -200;
-        if (_log) Console.WriteLine("repeated penalty: " + moveScore);
+        moveScore += Convert.ToInt32(WillThisCauseRepeated(_move)) * -350;
+        //if (_log) Console.WriteLine("repeated penalty: " + moveScore);
+        if ((_move.StartSquare.Rank == 1 && forwardIsUp==1) || (_move.StartSquare.Rank == 8 && forwardIsUp==-1))
+            moveScore += 15; //"Development" bonus.
 
         return moveScore;
-    }
-
-    int IsPieceProtected( Board _b, Move _move, bool _whiteIsAllied )
-    {
-        if (turnCount == 0)
-            return 0;
-
-        int bonus = 0;
-        int protectBonus = 8;
-        Piece p;
-
-        p = _b.GetPiece(new Square(Bound(_move.TargetSquare.File - 1), Bound(_move.TargetSquare.Rank -forwardIsUp)));
-        if( (p.IsPawn || p.IsBishop || p.IsQueen) )
-        {
-            bonus += protectBonus * (p.IsWhite == _whiteIsAllied ? 1 : -2);
-        }
-
-        p = _b.GetPiece(new Square( Bound(_move.TargetSquare.File + 1), Bound(_move.TargetSquare.Rank -forwardIsUp)));
-        if ((p.IsPawn || p.IsBishop || p.IsQueen) && p.IsWhite == _whiteIsAllied)
-        {
-            bonus += protectBonus * (p.IsWhite == _whiteIsAllied ? 1 : -2);
-        }
-
-        return bonus;
     }
 
     int Bound( int _i )
@@ -187,12 +193,14 @@ public Move Think(Board _b, Timer timer)
     }
 
     // Test if this move gives checkmate
-    int CheckOrCheckmate(Move move)
+    int IsCheckOrCheckmate(Move move)
     {
         int moveScore = 0;
         board.MakeMove(move);
-            moveScore += Convert.ToInt32(board.IsInCheckmate())*999999;
-            moveScore += Convert.ToInt32(board.IsInCheck()) * ((CHECK_BONUS - pieceValues[(int)move.MovePieceType])/50);
+            moveScore += Convert.ToInt32(board.IsInCheckmate())*99999;
+            moveScore += Math.Max( Convert.ToInt32(board.IsInCheck()) * ((CHECK_BONUS - pieceValues[(int)move.MovePieceType])/50), 0);
+            if( checkDraws ) //Only check draws if moveScore 
+                moveScore += Convert.ToInt32(board.IsDraw()) * -999999;
         board.UndoMove(move);
         return moveScore;
     }
